@@ -70,10 +70,20 @@ io.on('connection', (socket) => {
   socket.on('start_next', ({ code }) => {
     const session = sessions[code];
     if (!session) return;
+
+    // if there is an active candidate, end their interview first
+    if (session.activeCandidate) {
+      const prev = session.activeCandidate;
+      session.activeCandidate = null;
+      io.to(prev).emit('interview_ended');
+      io.to(session.host).emit('interview_ended_host');
+    }
+
     if (session.queue.length === 0) {
       io.to(session.host).emit('queue_update', { queue: session.queue });
       return;
     }
+
     const next = session.queue.shift();
     session.activeCandidate = next;
 
@@ -100,6 +110,15 @@ io.on('connection', (socket) => {
     session.activeCandidate = null;
     if (candidate) io.to(candidate).emit('interview_ended');
     io.to(session.host).emit('interview_ended_host');
+
+    // update host with current queue and notify positions
+    if (session) {
+      io.to(session.host).emit('queue_update', { queue: session.queue });
+      session.queue.forEach((cid) => {
+        const you = session.queue.indexOf(cid) + 1;
+        io.to(cid).emit('queue_update', { queue: session.queue, you });
+      });
+    }
   });
 
   // host can request to end current interview without providing code (fallback)
@@ -139,6 +158,18 @@ io.on('connection', (socket) => {
     if (!to) return;
     console.log('Host', socket.id, 'ready for candidate', to);
     io.to(to).emit('host_ready', { from: socket.id });
+  });
+
+  // forward explicit screen share signals to help clients classify incoming streams
+  socket.on('screen_share_started', ({ to }) => {
+    if (!to) return;
+    console.log('Signal: screen_share_started from', socket.id, 'to', to);
+    io.to(to).emit('screen_share_started', { from: socket.id });
+  });
+  socket.on('screen_share_stopped', ({ to }) => {
+    if (!to) return;
+    console.log('Signal: screen_share_stopped from', socket.id, 'to', to);
+    io.to(to).emit('screen_share_stopped', { from: socket.id });
   });
 
   socket.on('disconnect', () => {

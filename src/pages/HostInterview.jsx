@@ -1,14 +1,113 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import socket from '../socket';
+import DebugPanel from '../components/DebugPanel';
 
 export default function HostInterview() {
   const localVideoRef = useRef();
   const candidateVideoRef = useRef();
   const screenVideoRef = useRef();
   const [pc, setPc] = useState(null);
+  const pcRef = useRef(null);
   const [localStream, setLocalStream] = useState(null);
+  const localStreamRef = useRef(null);
+  const [hostSharing, setHostSharing] = useState(false);
+  const hostScreenRef = useRef({ sender: null, stream: null });
   const navigate = useNavigate();
+
+  function stopLocalAndCleanup() {
+    try {
+      if (hostScreenRef.current && hostScreenRef.current.stream) hostScreenRef.current.stream.getTracks().forEach((t) => t.stop());
+    } catch (e) {}
+    try {
+      if (localStreamRef.current) localStreamRef.current.getTracks().forEach((t) => t.stop());
+    } catch (e) {}
+    try {
+      if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+    } catch (e) {}
+    setHostSharing(false);
+    setLocalStream(null);
+    localStreamRef.current = null;
+    setPc(null);
+  }
+
+  // debug logs for UI
+  const [logs, setLogs] = React.useState([]);
+  function pushLog(msg) {
+    setLogs((s) => [...s, `${new Date().toLocaleTimeString()} - ${msg}`]);
+    console.log(msg);
+  }
+
+  // toggle host screen sharing (adds/removes display track and forces negotiation)
+  async function toggleHostScreen() {
+    if (!pc) return pushLog('PC not ready');
+    const candidate = sessionStorage.getItem('activeCandidate');
+    try {
+      if (!hostScreenRef.current.stream) {
+        pushLog('Starting host screen share...');
+        const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        hostScreenRef.current.stream = s;
+        const track = s.getVideoTracks()[0];
+        const sender = pc.addTrack(track, s);
+        hostScreenRef.current.sender = sender;
+        setHostSharing(true);
+        pushLog('Host added screen track, forcing offer to candidate ' + candidate);
+
+        // ensure negotiation: create offer and send to candidate
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('webrtc_offer', { to: candidate, sdp: offer });
+          pushLog('Host sent offer for screen to candidate');
+          // notify candidate explicitly that a screen share started (helps with classification)
+          socket.emit('screen_share_started', { to: candidate });
+        } catch (err) {
+          pushLog('Host failed to create/send offer for screen: ' + err.message);
+        }
+
+        track.onended = async () => {
+          pushLog('Host screen track ended');
+          try { if (hostScreenRef.current.sender) pc.removeTrack(hostScreenRef.current.sender); } catch(e) {}
+          hostScreenRef.current.sender = null;
+          hostScreenRef.current.stream = null;
+          setHostSharing(false);
+          // notify candidate that screen stopped
+          try { socket.emit('screen_share_stopped', { to: candidate }); } catch(e) {}
+          // renegotiate to remove track
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit('webrtc_offer', { to: candidate, sdp: offer });
+            pushLog('Host sent offer after stopping screen');
+          } catch (err) {
+            pushLog('Host failed renegotiation after stopping screen: ' + err.message);
+          }
+        };
+      } else {
+        pushLog('Stopping host screen share...');
+        hostScreenRef.current.stream.getTracks().forEach((t) => t.stop());
+        if (hostScreenRef.current.sender) try { pc.removeTrack(hostScreenRef.current.sender); } catch (e) {}
+        hostScreenRef.current.sender = null;
+        hostScreenRef.current.stream = null;
+        setHostSharing(false);
+
+        // notify candidate that screen stopped
+        try { socket.emit('screen_share_stopped', { to: candidate }); } catch(e) {}
+
+        // create offer to renegotiate without screen
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('webrtc_offer', { to: candidate, sdp: offer });
+          pushLog('Host sent offer after stopping screen (manual)');
+        } catch (err) {
+          pushLog('Host failed to send offer after stopping screen: ' + err.message);
+        }
+      }
+    } catch (err) {
+      pushLog('Host screen share failed: ' + err.message);
+    }
+  }
 
   useEffect(() => {
     const session = sessionStorage.getItem('hostSession');
@@ -19,10 +118,12 @@ export default function HostInterview() {
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
     setPc(peer);
+    pcRef.current = peer;
 
     async function startLocal() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       setLocalStream(stream);
+      localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       stream.getTracks().forEach((t) => {
         console.log('Host adding local track', t.kind, t.label);
@@ -30,39 +131,7 @@ export default function HostInterview() {
       });
     }
 
-    // screen sharing helper for host
-    const hostScreenRef = { sender: null, stream: null };
 
-    // helper to toggle host screen (attach to window so UI button can call it)
-    socket._hostShare = async function toggleHostScreen() {
-      try {
-        if (!hostScreenRef.stream) {
-          const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
-          hostScreenRef.stream = s;
-          const track = s.getVideoTracks()[0];
-          const sender = peer.addTrack(track, s);
-          hostScreenRef.sender = sender;
-          console.log('Host added screen track', sender);
-
-          track.onended = () => {
-            try {
-              if (hostScreenRef.sender) peer.removeTrack(hostScreenRef.sender);
-            } catch (e) {}
-            hostScreenRef.sender = null;
-            hostScreenRef.stream = null;
-          };
-        } else {
-          // stop screen
-          hostScreenRef.stream.getTracks().forEach((t) => t.stop());
-          if (hostScreenRef.sender) peer.removeTrack(hostScreenRef.sender);
-          hostScreenRef.sender = null;
-          hostScreenRef.stream = null;
-        }
-        // trigger negotiation by adding/removing track
-      } catch (err) {
-        console.error('Host screen share failed', err);
-      }
-    };
 
     startLocal().then(() => {
       console.log('Host local started, notifying candidate', candidate);
@@ -72,52 +141,137 @@ export default function HostInterview() {
     // Keep track of remote streams
     const remoteStreams = new Map();
 
-    // negotiation handler (when host adds tracks like screen)
+    // Negotiation management (polite peer) to handle glare
+    const makingOfferHost = { current: false };
+    const politeHost = true; // host will be polite
+
     peer.onnegotiationneeded = async () => {
       try {
-        console.log('Host negotiationneeded - creating offer');
+        pushLog('Host negotiationneeded - creating offer');
+        makingOfferHost.current = true;
         const offer = await peer.createOffer();
         await peer.setLocalDescription(offer);
+        pushLog('Host senders: ' + peer.getSenders().map((s) => s.track && s.track.id).join(','));
         socket.emit('webrtc_offer', { to: candidate, sdp: offer });
       } catch (err) {
-        console.error('Host negotiation failed', err);
+        pushLog('Host negotiation failed: ' + err.message);
+      } finally {
+        makingOfferHost.current = false;
       }
     };
 
     // handle answers to host-initiated offers
     socket.on('webrtc_answer', async ({ from, sdp }) => {
-      console.log('Host received answer from', from);
+      pushLog('Host received answer from ' + from);
       try {
         await peer.setRemoteDescription(new RTCSessionDescription(sdp));
+        pushLog('Host set remote description after answer');
       } catch (err) {
-        console.error('Host failed to set remote description', err);
+        pushLog('Host failed to set remote description: ' + err.message);
       }
     });
 
+    // handle incoming offers with polite collision handling
+    socket.on('webrtc_offer', async ({ from, sdp }) => {
+      pushLog('Host received offer from ' + from);
+      const offer = new RTCSessionDescription(sdp);
+      const readyForOffer = !makingOfferHost.current && (peer.signalingState === 'stable');
+      const offerCollision = !readyForOffer;
+      if (offerCollision) pushLog('Host detected offer collision, polite=' + politeHost);
+      if (offerCollision && !politeHost) {
+        pushLog('Host ignoring offer due to collision');
+        return;
+      }
+      try {
+        await peer.setRemoteDescription(offer);
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        socket.emit('webrtc_answer', { to: from, sdp: answer });
+        pushLog('Host sent answer to ' + from);
+      } catch (err) {
+        pushLog('Host failed to handle offer: ' + err.message);
+      }
+    });
+
+    // buffered ontrack handling for host to avoid misclassification
+    const incomingStreamsHost = new Map();
+    let resolveTimerHost = null;
+    const expectScreenHostRef = { current: false };
+
+    // listen for candidate screen signals
+    socket.on('screen_share_started', ({ from }) => {
+      pushLog('Host received screen_share_started signal from ' + from);
+      expectScreenHostRef.current = true;
+    });
+    socket.on('screen_share_stopped', ({ from }) => {
+      pushLog('Host received screen_share_stopped signal from ' + from);
+      expectScreenHostRef.current = false;
+    });
+
+    function scheduleResolveIncomingHost() {
+      if (resolveTimerHost) return;
+      resolveTimerHost = setTimeout(() => {
+        resolveTimerHost = null;
+        for (const [key, s] of incomingStreamsHost.entries()) {
+          const stream = s.stream;
+          const videoTrack = stream.getVideoTracks()[0];
+          const settings = videoTrack && videoTrack.getSettings ? videoTrack.getSettings() : {};
+
+          // detect screen via explicit signal first, then displaySurface, label heuristics,
+          // then resolution, and as a practical heuristic treat video-without-audio as screen
+          const audioCount = stream.getAudioTracks().length;
+          const videoCount = stream.getVideoTracks().length;
+          pushLog('Host incoming stream tracks audio=' + audioCount + ' video=' + videoCount + ' settings=' + JSON.stringify({ width: settings.width, height: settings.height, displaySurface: settings.displaySurface }));
+
+          let isScreen = false;
+          if (expectScreenHostRef.current) {
+            isScreen = true;
+            expectScreenHostRef.current = false;
+            pushLog('Host using signal to classify as screen');
+          } else if (settings.displaySurface && settings.displaySurface !== 'none') {
+            isScreen = true;
+          } else if (videoCount > 0 && audioCount === 0) {
+            // common case: screen tracks often arrive without an audio track
+            isScreen = true;
+            pushLog('Host classifying as screen because video present but no audio');
+          } else {
+            const label = (videoTrack && videoTrack.label) ? videoTrack.label.toLowerCase() : '';
+            if (/screen|display|window|monitor|sharing/i.test(label)) isScreen = true;
+            else if (settings.width && settings.height) {
+              if (settings.width >= 1280 || settings.height >= 720) isScreen = true;
+            }
+          }
+
+          const id = stream.id || (videoTrack && videoTrack.id) || key;
+          pushLog('Host resolving incoming stream ' + id + ' isScreen=' + isScreen);
+
+          // if it's screen, attach to screenVideoRef
+          if (isScreen) {
+            remoteStreams.set(id, { type: 'screen', stream });
+            if (screenVideoRef.current) screenVideoRef.current.srcObject = stream;
+            pushLog('Attached candidate screen stream ' + id);
+            try { if (videoTrack) videoTrack.onended = () => setHostSharing(false); } catch (e) {}
+          } else {
+            remoteStreams.set(id, { type: 'camera', stream });
+            if (candidateVideoRef.current) candidateVideoRef.current.srcObject = stream;
+            pushLog('Attached candidate camera stream ' + id);
+          }
+
+          incomingStreamsHost.delete(key);
+        }
+      }, 200);
+    }
+
     peer.ontrack = (ev) => {
-      console.log('Host got ontrack', ev);
-      const stream = ev.streams && ev.streams[0];
-      if (!stream) return;
-
-      // If we don't have a candidate camera yet, attach this stream there
-      if (!candidateVideoRef.current.srcObject) {
-        candidateVideoRef.current.srcObject = stream;
-        remoteStreams.set(stream.id, { type: 'camera', stream });
-        console.log('Attached candidate camera stream', stream.id);
-        return;
+      console.log('Host got ontrack (buffered)', ev);
+      let stream = ev.streams && ev.streams[0];
+      if (!stream) {
+        stream = new MediaStream();
+        if (ev.track) stream.addTrack(ev.track);
       }
-
-      // If this stream is new and not the same as candidate camera, attach to screen
-      if (!remoteStreams.has(stream.id)) {
-        remoteStreams.set(stream.id, { type: 'screen', stream });
-        if (screenVideoRef.current) screenVideoRef.current.srcObject = stream;
-        console.log('Attached candidate screen stream', stream.id);
-        return;
-      }
-
-      // fallback: overwrite candidate camera
-      candidateVideoRef.current.srcObject = stream;
-      console.log('Replaced candidate camera with stream', stream.id);
+      const key = Date.now() + Math.random();
+      incomingStreamsHost.set(key, { stream });
+      scheduleResolveIncomingHost();
     };
 
     peer.onicecandidate = (e) => {
@@ -153,22 +307,21 @@ export default function HostInterview() {
 
     socket.on('interview_ended_host', () => {
       // cleanup
-      try {
-        if (hostScreenRef && hostScreenRef.stream) hostScreenRef.stream.getTracks().forEach((t) => t.stop());
-      } catch (e) {}
-      if (localStream) localStream.getTracks().forEach((t) => t.stop());
-      peer.close();
+      stopLocalAndCleanup();
       sessionStorage.removeItem('activeCandidate');
       navigate('/host');
     });
 
     return () => {
+      try { if (resolveTimerHost) clearTimeout(resolveTimerHost); } catch (e) {}
       socket.off('webrtc_offer');
       socket.off('webrtc_ice');
       socket.off('webrtc_answer');
       socket.off('interview_ended_host');
+      socket.off('screen_share_started');
+      socket.off('screen_share_stopped');
       try {
-        if (hostScreenRef && hostScreenRef.stream) hostScreenRef.stream.getTracks().forEach((t) => t.stop());
+        if (hostScreenRef && hostScreenRef.current && hostScreenRef.current.stream) hostScreenRef.current.stream.getTracks().forEach((t) => t.stop());
       } catch (e) {}
       if (peer && peer.connectionState !== 'closed') peer.close();
     };
@@ -177,6 +330,9 @@ export default function HostInterview() {
   function endInterview() {
     const code = sessionStorage.getItem('hostSession');
     console.log('Host clicked End Interview, code=', code);
+    // perform immediate local cleanup to stop camera immediately
+    stopLocalAndCleanup();
+
     if (code) {
       socket.emit('end_interview', { code }, (res) => {
         // no callback on server currently, but keep for future
@@ -208,8 +364,17 @@ export default function HostInterview() {
 
       <div style={{ marginTop: 10 }}>
         <button onClick={endInterview}>End Interview</button>
-        <button style={{ marginLeft: 10 }} onClick={() => { if (socket._hostShare) socket._hostShare(); else console.warn('host share not available'); }}>Share Screen</button>
+        <button
+          style={{ marginLeft: 10, backgroundColor: hostSharing ? 'green' : undefined }}
+          onClick={toggleHostScreen}
+        >{hostSharing ? 'Stop Screen' : 'Share Screen'}</button>
+        <button style={{ marginLeft: 10 }} onClick={() => {
+          const code = sessionStorage.getItem('hostSession');
+          if (code) socket.emit('start_next', { code });
+        }}>Start Next</button>
       </div>
+
+      <DebugPanel logs={logs} />
     </div>
   );
 }
