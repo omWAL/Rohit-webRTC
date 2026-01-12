@@ -51,11 +51,11 @@ No media server (SFU/TURN) → zero cost
 1️⃣ Install dependencies
 npm install
 
-2️⃣ Start backend server
-npm run server
+2️⃣ npm run server
 
-3️⃣ Start frontend (new terminal)
-npm run dev
+
+(new terminal)
+3️⃣ npm run dev
 
 🌐 Routes
 
