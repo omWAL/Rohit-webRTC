@@ -1,43 +1,92 @@
-# React + Vite
+🎥 Simple Interview System (React + Vite + WebRTC)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This project is a minimal online interview platform built using React, Vite, Socket.IO, and WebRTC.
+It is designed as a demo / internship-level project focusing on peer-to-peer communication with no paid servers.
 
-Currently, two official plugins are available:
+🚀 Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Frontend: React + Vite
 
-## React Compiler
+Backend: Node.js + Socket.IO
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Real-time Communication: WebRTC (Peer-to-Peer)
 
-## Expanding the ESLint configuration
+Linting: ESLint
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Dev Tools: HMR (Hot Module Replacement)
 
----
+⚡ Vite + React Setup
 
-## Simple Interview System (added)
+This template provides a minimal setup to get React working in Vite with HMR and ESLint rules.
 
-This repository has been extended with a minimal online interview system using Socket.IO and WebRTC.
+Official Plugins Used
 
-Quick start:
+@vitejs/plugin-react – Uses Babel (or oxc) for Fast Refresh
 
-1. Install dependencies:
+@vitejs/plugin-react-swc – Uses SWC for faster builds
 
-   npm install
+ℹ️ React Compiler is not enabled due to its impact on dev and build performance.
+See the official documentation if you want to enable it.
 
-2. Start the backend server:
+🎯 Project Features
 
-   npm run server
+Host creates a unique interview session
 
-3. Start the frontend (in a different terminal):
+Candidate joins using the session ID
 
-   npm run dev
+Peer-to-peer audio/video via WebRTC
 
-Open `/host` to create a session and `/join` to join as a candidate.
+Socket.IO server used only for:
 
-Notes:
-- The backend is an in-memory Socket.IO server located at `index.js`.
-- The frontend pages are in `src/pages/` and the Socket client is `src/socket.js`.
-- This is a demo: use real TURN servers and persistence for production.
+Signaling
+
+Session management
+
+Waiting queue
+
+No media server (SFU/TURN) → zero cost
+
+
+🛠️ Quick Start
+1️⃣ Install dependencies
+npm install
+
+2️⃣ Start backend server
+npm run server
+
+3️⃣ Start frontend (new terminal)
+npm run dev
+
+🌐 Routes
+
+/host → Create interview session
+
+/join → Join as candidate using session ID
+
+⚠️ Important Notes
+
+Backend uses in-memory storage (no database)
+
+Designed for learning & demo purposes only
+
+For production:
+
+Use TURN servers
+
+Add authentication
+
+Persist session data
+
+Handle NAT / firewall issues
+
+📌 Use Case
+
+Perfect for:
+
+Internship projects
+
+WebRTC learning
+
+Real-time system architecture demos
+
+Low-cost interview platforms
