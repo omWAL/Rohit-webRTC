@@ -61,14 +61,12 @@ export default function Interview() {
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
       stream.getTracks().forEach((t) => {
-        console.log('Adding local track', t.kind, t.label);
         peer.addTrack(t, stream);
       });
     }
 
     // Simple ontrack handler - attach immediately
     peer.ontrack = (ev) => {
-      console.log('Candidate got ontrack event', ev.track.kind, ev.track.id);
       let stream = ev.streams && ev.streams[0];
       if (!stream) {
         stream = new MediaStream();
@@ -84,18 +82,24 @@ export default function Interview() {
       
       if (isScreen) {
         pushLog('Candidate: attaching to host screen element');
-        if (screenVideoRef.current) screenVideoRef.current.srcObject = stream;
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream;
+          screenVideoRef.current.play().catch(e => pushLog('Screen play error: ' + e.message));
+        }
         setHostSharing(true);
       } else {
         pushLog('Candidate: attaching to host camera element');
-        if (hostVideoRef.current) hostVideoRef.current.srcObject = stream;
+        if (hostVideoRef.current) {
+          hostVideoRef.current.srcObject = stream;
+          hostVideoRef.current.play().catch(e => pushLog('Host play error: ' + e.message));
+        }
       }
       
       remoteStreams.set(stream.id || ev.track.id, { type: isScreen ? 'screen' : 'camera', stream });
     };
 
     peer.oniceconnectionstatechange = () => {
-      console.log('Candidate pc state', peer.connectionState, peer.iceConnectionState);
+      // Connection state changed
     };
 
     startLocal();
@@ -103,7 +107,6 @@ export default function Interview() {
     // ICE candidate handling
     peer.onicecandidate = (e) => {
       if (e.candidate) {
-        console.log('Candidate sending ICE to host', hostId, e.candidate);
         socket.emit('webrtc_ice', { to: hostId, candidate: e.candidate });
       }
     };
@@ -121,13 +124,11 @@ export default function Interview() {
 
     // receive offer (host may initiate renegotiation for screen or other tracks)
     socket.on('webrtc_offer', async ({ from, sdp }) => {
-      console.log('Candidate received offer from', from);
       try {
         await peer.setRemoteDescription(new RTCSessionDescription(sdp));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         socket.emit('webrtc_answer', { to: from, sdp: answer });
-        console.log('Candidate sent answer to', from);
       } catch (err) {
         console.error('Candidate failed to handle offer', err);
       }
@@ -135,7 +136,6 @@ export default function Interview() {
 
     // receive ICE from host
     socket.on('webrtc_ice', async ({ candidate }) => {
-      console.log('Candidate received ICE', candidate);
       try {
         await peer.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (err) {
@@ -206,13 +206,11 @@ export default function Interview() {
 
     // Wait for host to be ready before creating offer. Host will emit 'host_ready'.
     socket.on('host_ready', ({ from }) => {
-      console.log('Candidate received host_ready from', from);
       createOffer();
     });
 
     // Fallback in case 'host_ready' is missed
     const fallbackOffer = setTimeout(() => {
-      console.warn('Fallback: creating offer after timeout');
       createOffer();
     }, 3000);
 
@@ -426,97 +424,71 @@ export default function Interview() {
   }, [isRecording]);
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Interview (Candidate)</h2>
-      <div style={{ display: 'flex', gap: 20 }}>
-        <div>
-          <h3>Your camera</h3>
-          <video ref={localVideoRef} autoPlay playsInline muted style={{ width: 320, height: 240, background: '#000' }} />
-        </div>
-        <div>
-          <h3>Host camera</h3>
-          <video ref={hostVideoRef} autoPlay playsInline style={{ width: 320, height: 240, background: '#000' }} />
-        </div>
-        <div>
-          <h3>Host screen</h3>
-          <video ref={screenVideoRef} autoPlay playsInline style={{ width: 320, height: 240, background: '#000' }} />
-        </div>
+    <div style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#1a1a1a', margin: 0, padding: 0, boxSizing: 'border-box', overflowX: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '10px 15px', borderBottom: '1px solid #333', flexShrink: 0, boxSizing: 'border-box', width: '100%' }}>
+        <h2 style={{ color: '#fff', margin: 0, fontSize: '18px' }}>Interview</h2>
       </div>
 
-      <div style={{ marginTop: 10 }}>
-        <button
-          style={{
-            backgroundColor: '#f44336',
-            color: 'white',
-            padding: '10px 15px',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-          onClick={() => {
-            stopLocalAndCleanup();
-            socket.emit('end_interview_now');
-            navigate('/join');
-          }}
-        >
-          End Interview
-        </button>
-        <button onClick={toggleScreen} style={{ marginLeft: 10, backgroundColor: screenSharing ? 'green' : undefined }}>{screenSharing ? 'Stop Screen Share' : 'Share Screen'}</button>
-        <button
-          style={{
-            marginLeft: 10,
-            backgroundColor: isRecording ? 'red' : '#ccc',
-            color: isRecording ? 'white' : 'black',
-            padding: '10px 15px',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-          onClick={handleToggleRecording}
-        >
-          {isRecording ? `Stop Recording (${recordingTime})` : 'Record'}
-        </button>
-        {isRecording && (
-          <button
-            style={{
-              marginLeft: 10,
-              backgroundColor: isRecordingPaused ? 'orange' : 'blue',
-              color: 'white',
-              padding: '10px 15px',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-            onClick={handleTogglePauseRecording}
-          >
-            {isRecordingPaused ? 'Resume Recording' : 'Pause Recording'}
-          </button>
+      {/* Main Video Area - Takes most of the space */}
+      <div style={{ flex: 1, display: 'flex', gap: 10, padding: 10, position: 'relative', overflow: 'hidden', minHeight: 0, boxSizing: 'border-box', width: '90vw', height: '85vh' }}>
+        {/* Left Side: Videos (stacked) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 15, flex: hostSharing ? '0 0 200px' : 1, minWidth: 0, minHeight: 0 }}>
+          {/* Remote Camera - Big when no screen, small when screen active */}
+          <div style={{ 
+            flex: hostSharing ? '0 0 150px' : 1,
+            background: '#000', 
+            borderRadius: '8px', 
+            overflow: 'hidden',
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: 0
+          }}>
+            <video ref={hostVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            <span style={{ position: 'absolute', bottom: 10, left: 10, color: '#fff', fontSize: '12px', backgroundColor: 'rgba(0,0,0,0.7)', padding: '5px 10px', borderRadius: '4px' }}>Host Camera</span>
+          </div>
+
+          {/* Own Video - Always small, bottom left */}
+          <div style={{ 
+            flex: '0 0 100px',
+            width: '100%', 
+            background: '#000', 
+            borderRadius: '8px', 
+            overflow: 'hidden',
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            <span style={{ position: 'absolute', bottom: 5, left: 5, color: '#fff', fontSize: '10px', backgroundColor: 'rgba(0,0,0,0.7)', padding: '3px 8px', borderRadius: '3px' }}>You</span>
+          </div>
+        </div>
+
+        {/* Right Side: Screen Share (if active) */}
+        {hostSharing && (
+          <div style={{ flex: 1, background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}>
+            <video ref={screenVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            <span style={{ position: 'absolute', top: 10, right: 10, color: '#fff', fontSize: '12px', backgroundColor: 'rgba(0,0,0,0.7)', padding: '5px 10px', borderRadius: '4px' }}>Host Screen</span>
+          </div>
         )}
-        <button
-          style={{
-            marginLeft: 10,
-            backgroundColor: '#4CAF50',
-            color: 'white',
-            padding: '10px 15px',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-          onClick={handleUploadRecording}
-        >
-          Upload to Server
-        </button>
       </div>
-      <canvas
-        ref={recordingCanvasRef}
-        style={{ display: 'none', width: 1000, height: 280 }}
-      />
 
-      <DebugPanel logs={logs} />
+      {/* Bottom Control Bar */}
+      <div style={{ padding: '10px 15px', borderTop: '1px solid #333', backgroundColor: '#0d0d0d', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0, boxSizing: 'border-box', width: '100%' }}>
+        <button style={{ backgroundColor: '#f44336', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={() => { stopLocalAndCleanup(); socket.emit('end_interview_now'); navigate('/join'); }}>End Interview</button>
+        <button style={{ backgroundColor: screenSharing ? 'green' : '#666', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={toggleScreen}>{screenSharing ? 'Stop Screen' : 'Share Screen'}</button>
+        
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button style={{ backgroundColor: isRecording ? 'red' : '#ccc', color: isRecording ? 'white' : 'black', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={handleToggleRecording}>{isRecording ? `Rec (${recordingTime})` : 'Record'}</button>
+          {isRecording && <button style={{ backgroundColor: isRecordingPaused ? 'orange' : 'blue', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={handleTogglePauseRecording}>{isRecordingPaused ? 'Resume' : 'Pause'}</button>}
+          <button style={{ backgroundColor: '#4CAF50', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={handleUploadRecording}>Upload</button>
+        </div>
+      </div>
+
+      <canvas ref={recordingCanvasRef} style={{ display: 'none', width: 1000, height: 280 }} />
     </div>
   );
 }

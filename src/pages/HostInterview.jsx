@@ -245,7 +245,6 @@ export default function HostInterview() {
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       stream.getTracks().forEach((t) => {
-        console.log('Host adding local track', t.kind, t.label);
         peer.addTrack(t, stream);
       });
     }
@@ -253,7 +252,6 @@ export default function HostInterview() {
 
 
     startLocal().then(() => {
-      console.log('Host local started, notifying candidate', candidate);
       socket.emit('host_ready', { to: candidate });
     }).catch((err) => console.error('Host failed to start local stream', err));
 
@@ -314,7 +312,6 @@ export default function HostInterview() {
 
     // Simple ontrack handler - attach immediately
     peer.ontrack = (ev) => {
-      console.log('Host got ontrack event', ev.track.kind, ev.track.id);
       let stream = ev.streams && ev.streams[0];
       if (!stream) {
         stream = new MediaStream();
@@ -330,11 +327,17 @@ export default function HostInterview() {
       
       if (isScreen) {
         pushLog('Host: attaching to screen share element');
-        if (screenVideoRef.current) screenVideoRef.current.srcObject = stream;
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream;
+          screenVideoRef.current.play().catch(e => pushLog('Screen play error: ' + e.message));
+        }
         setHostSharing(true);
       } else {
         pushLog('Host: attaching to candidate camera element');
-        if (candidateVideoRef.current) candidateVideoRef.current.srcObject = stream;
+        if (candidateVideoRef.current) {
+          candidateVideoRef.current.srcObject = stream;
+          candidateVideoRef.current.play().catch(e => pushLog('Candidate play error: ' + e.message));
+        }
       }
       
       remoteStreams.set(stream.id || ev.track.id, { type: isScreen ? 'screen' : 'camera', stream });
@@ -342,28 +345,24 @@ export default function HostInterview() {
 
     peer.onicecandidate = (e) => {
       if (e.candidate) {
-        console.log('Host sending ICE to candidate', candidate, e.candidate);
         socket.emit('webrtc_ice', { to: candidate, candidate: e.candidate });
       }
     };
 
     // when an offer arrives
     socket.on('webrtc_offer', async ({ from, sdp }) => {
-      console.log('Host received offer from', from);
       if (from !== candidate) return; // ignore other offers
       try {
         await peer.setRemoteDescription(new RTCSessionDescription(sdp));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         socket.emit('webrtc_answer', { to: from, sdp: answer });
-        console.log('Host sent answer to', from);
       } catch (err) {
         console.error('Host failed to handle offer', err);
       }
     });
 
     socket.on('webrtc_ice', async ({ candidate: c, from }) => {
-      console.log('Host received ICE from', from, c);
       try {
         await peer.addIceCandidate(new RTCIceCandidate(c));
       } catch (err) {
@@ -392,14 +391,12 @@ export default function HostInterview() {
 
   function endInterview() {
     const code = sessionStorage.getItem('hostSession');
-    console.log('Host clicked End Interview, code=', code);
     // perform immediate local cleanup to stop camera immediately
     stopLocalAndCleanup();
 
     if (code) {
       socket.emit('end_interview', { code }, (res) => {
         // no callback on server currently, but keep for future
-        console.log('end_interview ack', res);
       });
     } else {
       // fallback
@@ -408,87 +405,72 @@ export default function HostInterview() {
   }
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Host Interview</h2>
-      <div style={{ display: 'flex', gap: 20 }}>
-        <div>
-          <h3>Your camera</h3>
-          <video ref={localVideoRef} autoPlay playsInline muted style={{ width: 320, height: 240, background: '#000' }} />
-        </div>
-        <div>
-          <h3>Candidate camera</h3>
-          <video ref={candidateVideoRef} autoPlay playsInline style={{ width: 320, height: 240, background: '#000' }} />
-        </div>
-        <div>
-          <h3>Candidate screen</h3>
-          <video ref={screenVideoRef} autoPlay playsInline style={{ width: 320, height: 240, background: '#000' }} />
-        </div>
+    <div style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#1a1a1a', margin: 0, padding: 0, boxSizing: 'border-box', overflowX: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '10px 15px', borderBottom: '1px solid #333', flexShrink: 0, boxSizing: 'border-box', width: '100%' }}>
+        <h2 style={{ color: '#fff', margin: 0, fontSize: '18px' }}>Host Interview</h2>
       </div>
 
-      <div style={{ marginTop: 10 }}>
-        <button onClick={endInterview}>End Interview</button>
-        <button
-          style={{ marginLeft: 10, backgroundColor: hostSharing ? 'green' : undefined }}
-          onClick={toggleHostScreen}
-        >{hostSharing ? 'Stop Screen' : 'Share Screen'}</button>
-        <button style={{ marginLeft: 10 }} onClick={() => {
-          const code = sessionStorage.getItem('hostSession');
-          if (code) socket.emit('start_next', { code });
-        }}>Start Next</button>
-        <button
-          style={{
-            marginLeft: 10,
-            backgroundColor: isRecording ? 'red' : '#ccc',
-            color: isRecording ? 'white' : 'black',
-            padding: '10px 15px',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-          onClick={handleToggleRecording}
-        >
-          {isRecording ? `Stop Recording (${recordingTime})` : 'Record'}
-        </button>
-        {isRecording && (
-          <button
-            style={{
-              marginLeft: 10,
-              backgroundColor: isRecordingPaused ? 'orange' : 'blue',
-              color: 'white',
-              padding: '10px 15px',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-            onClick={handleTogglePauseRecording}
-          >
-            {isRecordingPaused ? 'Resume Recording' : 'Pause Recording'}
-          </button>
+      {/* Main Video Area - Takes most of the space */}
+      <div style={{ flex: 1, display: 'flex', gap: 10, padding: 10, position: 'relative', overflow: 'hidden', minHeight: 0, boxSizing: 'border-box', width: '90vw', height: '85vh' }}>
+        {/* Left Side: Videos (stacked) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 15, flex: hostSharing ? '0 0 200px' : 1, minWidth: 0, minHeight: 0 }}>
+          {/* Remote Camera - Big when no screen, small when screen active */}
+          <div style={{ 
+            flex: hostSharing ? '0 0 150px' : 1,
+            background: '#000', 
+            borderRadius: '8px', 
+            overflow: 'hidden',
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: 0
+          }}>
+            <video ref={candidateVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            <span style={{ position: 'absolute', bottom: 10, left: 10, color: '#fff', fontSize: '12px', backgroundColor: 'rgba(0,0,0,0.7)', padding: '5px 10px', borderRadius: '4px' }}>Candidate Camera</span>
+          </div>
+
+          {/* Own Video - Always small, bottom left */}
+          <div style={{ 
+            flex: '0 0 100px',
+            width: '100%', 
+            background: '#000', 
+            borderRadius: '8px', 
+            overflow: 'hidden',
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            <span style={{ position: 'absolute', bottom: 5, left: 5, color: '#fff', fontSize: '10px', backgroundColor: 'rgba(0,0,0,0.7)', padding: '3px 8px', borderRadius: '3px' }}>You</span>
+          </div>
+        </div>
+
+        {/* Right Side: Screen Share (if active) */}
+        {hostSharing && (
+          <div style={{ flex: 1, background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0 }}>
+            <video ref={screenVideoRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            <span style={{ position: 'absolute', top: 10, right: 10, color: '#fff', fontSize: '12px', backgroundColor: 'rgba(0,0,0,0.7)', padding: '5px 10px', borderRadius: '4px' }}>Screen Share</span>
+          </div>
         )}
-        <button
-          style={{
-            marginLeft: 10,
-            backgroundColor: '#4CAF50',
-            color: 'white',
-            padding: '10px 15px',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-          onClick={handleUploadRecording}
-        >
-          Upload to Server
-        </button>
       </div>
-      <canvas
-        ref={recordingCanvasRef}
-        style={{ display: 'none', width: 1000, height: 280 }}
-      />
 
-      <DebugPanel logs={logs} />
+      {/* Bottom Control Bar */}
+      <div style={{ padding: '10px 15px', borderTop: '1px solid #333', backgroundColor: '#0d0d0d', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0, boxSizing: 'border-box', width: '100%' }}>
+        <button onClick={endInterview} style={{ backgroundColor: '#f44336', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}>End Interview</button>
+        <button style={{ backgroundColor: hostSharing ? 'green' : '#666', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={toggleHostScreen}>{hostSharing ? 'Stop Screen' : 'Share Screen'}</button>
+        <button style={{ padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px', backgroundColor: '#2196F3', color: 'white' }} onClick={() => { const code = sessionStorage.getItem('hostSession'); if (code) socket.emit('start_next', { code }); }}>Start Next</button>
+        
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button style={{ backgroundColor: isRecording ? 'red' : '#ccc', color: isRecording ? 'white' : 'black', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={handleToggleRecording}>{isRecording ? `Rec (${recordingTime})` : 'Record'}</button>
+          {isRecording && <button style={{ backgroundColor: isRecordingPaused ? 'orange' : 'blue', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={handleTogglePauseRecording}>{isRecordingPaused ? 'Resume' : 'Pause'}</button>}
+          <button style={{ backgroundColor: '#4CAF50', color: 'white', padding: '8px 12px', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }} onClick={handleUploadRecording}>Upload</button>
+        </div>
+      </div>
+
+      <canvas ref={recordingCanvasRef} style={{ display: 'none', width: 1000, height: 280 }} />
     </div>
   );
 }
