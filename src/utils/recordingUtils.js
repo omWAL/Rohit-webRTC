@@ -62,7 +62,7 @@ export function pauseRecording() {
 
 export function resumeRecording() {
   if (!mediaRecorder) return { ok: false, error: 'No recorder' };
-  if (mediaRecorder.state === 'paused') {
+  if (mediaRecorder.state === 'paused') {q
     mediaRecorder.resume();
     recordingStartTime = Date.now() - recordingPausedTime;
     console.log('Recording resumed');
