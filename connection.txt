@@ -1,0 +1,117 @@
+PROJECT STRUCTURE AND FILE CONNECTIONS
+
+This document explains the role of each file in the project and how they are connected to create the WebRTC Interview System.
+
+=========================================
+1. BACKEND (Server-Side)
+=========================================
+
+[index.js]
+- ROLE: The main backend server.
+- TECH: Node.js, Express, Socket.IO.
+- FUNCTIONALITY:
+    - Serves the frontend static files (from 'dist' when built).
+    - Manages WebSocket connections for real-time signaling.
+    - Handles "Sessions":
+        - Creates interview codes.
+        - Manages queues (Host vs Candidates).
+        - Facilitates "Signaling" (forwarding WebRTC offers/answers/ICE candidates between Host and Candidate).
+    - Handles File Uploads: Receives recorded interview videos (blobs) via the `/api/recordings` endpoint and saves them to the `recordings/` folder.
+- CONNECTIONS:
+    - Listens on port 3000.
+    - Connects to: `src/socket.js` (Front-end clients connect here).
+    - Writes to: `recordings/` directory on disk.
+
+[package.json]
+- ROLE: Project configuration.
+- FUNCTIONALITY: Defines dependencies (React, Vite, Express, Socket.IO) and scripts (`npm run dev`, `npm run server`).
+
+=========================================
+2. FRONTEND (Client-Side) - src/
+=========================================
+
+[src/main.jsx]
+- ROLE: The entry point for the React application.
+- FUNCTIONALITY: Renders the root `App` component into the HTML DOM.
+
+[src/App.jsx]
+- ROLE: The central Router.
+- FUNCTIONALITY: Defines the navigation paths using `react-router-dom`.
+- ROUTES:
+    - `/` or `/join` -> CandidateJoin (Enter code to join).
+    - `/waiting` -> Waiting (Queue screen for candidate).
+    - `/interview` -> Interview (Active interview screen for candidate).
+    - `/host` -> Host (Dashboard to create sessions).
+    - `/host-interview` -> HostInterview (Active interview screen for host).
+
+[src/socket.js]
+- ROLE: Singleton Socket Connection.
+- FUNCTIONALITY: Creates a single Socket.IO client instance connecting to `http://localhost:3000`.
+- CONNECTIONS: Imported by all pages (`HostInterview.jsx`, `Interview.jsx`, etc.) to communicate with `index.js`.
+
+[src/request.js] (Implicit/Not explicitly listed but common) or Internal Fetch
+- Note: The app uses `fetch` or `axios` (implied in logic) to upload recordings to `http://localhost:3000/api/recordings`.
+
+=========================================
+3. PAGES (src/pages/)
+=========================================
+
+[src/pages/HostInterview.jsx]
+- ROLE: The Host's main interface during an active interview.
+- FUNCTIONALITY:
+    - Initializes WebRTC PeerConnection (as the "Polite" peer).
+    - Captures Local Media (Camera/Mic).
+    - Receives Remote Media (Candidate Camera & Screen Share).
+    - Canvas Composition: Draws local video, candidate video, and candidate screen onto a hidden HTML5 Canvas.
+    - Recording: Records the Canvas stream and uploading it to `index.js`.
+    - Session Control: "Start Next", "End Interview" buttons that emit socket events.
+- CONNECTIONS:
+    - Imports `../socket` to listen for `webrtc_offer`, `candidate_started_screen`, etc.
+    - Imports `../utils/recordingUtils` to handle MediaRecorder logic.
+
+[src/pages/Interview.jsx]
+- ROLE: The Candidate's main interface.
+- FUNCTIONALITY:
+    - Initializes WebRTC PeerConnection.
+    - Captures Local Media (Camera/Mic).
+    - Screen Sharing: Captures display media and adds it as a track to the PeerConnection.
+    - Signaling: Negotiates with Host via `index.js`.
+    - Recording: Also has capability to record locally/upload.
+- CONNECTIONS:
+    - Imports `../socket` to signal readiness and send offers/answers.
+
+[src/pages/CandidateJoin.jsx]
+- ROLE: Entry screen for candidates.
+- FUNCTIONALITY: User inputs a session code. Emits `join_session` to `index.js`. If successful, redirects to `/waiting` or `/interview`.
+
+[src/pages/Host.jsx]
+- ROLE: Dashboard for the Host.
+- FUNCTIONALITY: Emits `create_session` to `index.js` to generate a unique code. Displays the queue of waiting candidates.
+
+[src/pages/Waiting.jsx]
+- ROLE: Queue screen.
+- FUNCTIONALITY: Listens for `queue_update` from `index.js`. Shows position in line (e.g., "You are #2"). Redirects to `/interview` when `interview_start` is received.
+
+=========================================
+DATA FLOW SUMMARY
+=========================================
+
+1. INITIALIZATION:
+   Host opens App -> `Host.jsx` -> Socket `create_session` -> `index.js` creates room.
+
+2. JOINING:
+   Candidate opens App -> `CandidateJoin.jsx` -> Socket `join_session` -> `index.js` adds to queue.
+   `index.js` notifies Host -> `Host.jsx` updates list.
+
+3. STARTING:
+   Host clicks "Start Next" -> `index.js` moves top candidate to active.
+   `index.js` tells Candidate -> Candidate moves to `Interview.jsx`.
+   `index.js` tells Host -> Host moves to `HostInterview.jsx`.
+
+4. SIGNALING (WebRTC):
+   `HostInterview.jsx` & `Interview.jsx` create PeerConnections.
+   They exchange SDP (Offer/Answer) and ICE Candidates via `socket.emit('webrtc_...')` -> `index.js` -> `socket.emit('webrtc_...')` -> Other Peer.
+   Direct P2P connection is established for Video/Audio.
+
+5. RECORDING:
+   `HostInterview.jsx` uses `recordingUtils` to capture current view -> User clicks "Stop" -> Blob created -> User clicks "Upload" -> POST /api/recordings -> `index.js` saves file.
