@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 🎥 Simple Interview System (React + Vite + WebRTC).
 
 This project is a minimal online interview platform built using React, Vite, Socket.IO, and WebRTC.
@@ -90,3 +91,6 @@ WebRTC learning
 Real-time system architecture demos
 
 Low-cost interview platforms
+=======
+# Rohit-webRTC
+>>>>>>> ff4524f4efbce16929c58533a399b876706e24a3
