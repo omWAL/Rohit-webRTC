@@ -33,10 +33,10 @@ app.post('/api/recordings', upload.single('recording'), (req, res) => {
     const fileName = req.body.fileName || `recording-${Date.now()}.webm`;
     const oldPath = req.file.path;
     const newPath = path.join(recordingsDir, fileName);
-    
+
     fs.renameSync(oldPath, newPath);
     console.log('Recording saved:', newPath);
-    
+
     res.json({ ok: true, message: 'Recording uploaded', fileName, path: newPath });
   } catch (err) {
     console.error('Recording upload failed:', err);
@@ -109,10 +109,11 @@ io.on('connection', (socket) => {
       const prev = session.activeCandidate;
       session.activeCandidate = null;
       io.to(prev).emit('interview_ended');
-      io.to(session.host).emit('interview_ended_host');
+      // Do not emit 'interview_ended_host' here, as we might be starting a new one
     }
 
     if (session.queue.length === 0) {
+      io.to(session.host).emit('interview_ended_host');
       io.to(session.host).emit('queue_update', { queue: session.queue });
       return;
     }
@@ -203,6 +204,18 @@ io.on('connection', (socket) => {
     if (!to) return;
     console.log('Signal: screen_share_stopped from', socket.id, 'to', to);
     io.to(to).emit('screen_share_stopped', { from: socket.id });
+  });
+
+  // Candidate screen sharing events
+  socket.on('candidate_started_screen', ({ to }) => {
+    if (!to) return;
+    console.log('Signal: candidate_started_screen from', socket.id, 'to', to);
+    io.to(to).emit('candidate_started_screen', { from: socket.id });
+  });
+  socket.on('candidate_stopped_screen', ({ to }) => {
+    if (!to) return;
+    console.log('Signal: candidate_stopped_screen from', socket.id, 'to', to);
+    io.to(to).emit('candidate_stopped_screen', { from: socket.id });
   });
 
   socket.on('disconnect', () => {
